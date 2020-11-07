@@ -4,9 +4,7 @@ import Simulation from './simulation';
 async function main(): Promise<void> {
     const wallsSize = 4.3;
 
-    const canvas: HTMLCanvasElement = document.getElementById('scene') as HTMLCanvasElement;
-
-    const render: Render = new Render(canvas, false);
+    const render: Render = new Render();
     render.setWallsSize(wallsSize);
     await render.load();
 

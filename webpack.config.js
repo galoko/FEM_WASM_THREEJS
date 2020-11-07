@@ -28,10 +28,10 @@ module.exports = {
     output: {
         filename: 'main.js',
         path: path.resolve(__dirname, 'build'),
-        publicPath: '/',
+        publicPath: '/build/',
     },
     devServer: {
-        contentBase: 'build',
+        contentBase: '.',
         host: '0.0.0.0',
         hot: true,
     },

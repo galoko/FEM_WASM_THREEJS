@@ -1,216 +1,110 @@
-import { vec2, vec3, vec4, mat4, glMatrix } from 'gl-matrix';
-import { Loader, ObjFile, TetFile, CompiledShader } from './loader';
+import * as THREE from 'three';
 
-class SceneShader extends CompiledShader {
-    vertexPosition: number;
-    vertexNormal: number;
-    vertexTexCoord: number;
-
-    projection: WebGLUniformLocation;
-    view: WebGLUniformLocation;
-    tex: WebGLUniformLocation;
-}
+import { Loader, TetFile } from './loader';
 
 export default class Render {
-    private gl: WebGLRenderingContext;
-    private canvas: HTMLCanvasElement;
-
-    private cubeModel: ObjFile;
-    private wallTexture: WebGLTexture;
-
-    private donutModel: TetFile;
-    private donutTexture: WebGLTexture;
-
-    private shader: SceneShader;
-
-    private projection: mat4;
-    private view: mat4;
-
-    private cameraPosition: vec3;
-    private cameraRotation: vec2;
+    private scene: THREE.Scene;
+    private renderer: THREE.WebGLRenderer;
+    private camera: THREE.PerspectiveCamera;
 
     private wallsSize: number;
 
-    constructor(canvas: HTMLCanvasElement, debug = false) {
-        const attributes: object = {
-            alpha: false,
-            antialias: true,
-            failIfMajorPerformanceCaveat: true,
-            powerPreference: 'high-performance',
-            preserveDrawingBuffer: false,
-            stencil: false,
-        };
+    private cubeModel: THREE.Mesh;
+    private donutModel: THREE.Mesh;
 
-        let gl: WebGLRenderingContext | null = canvas.getContext('webgl', attributes) as WebGLRenderingContext;
-        if (!gl) gl = canvas.getContext('experimental-webgl', attributes) as WebGLRenderingContext;
-        if (!gl) throw new Error('WebGL is not supported.');
-        if (debug) gl = this.wrapDebug(gl);
+    private donut: TetFile;
 
-        this.canvas = canvas;
-        this.gl = gl;
+    private width: number;
+    private height: number;
 
-        this.cameraPosition = vec3.fromValues(0, 0, 0);
-        this.cameraRotation = vec2.fromValues(0, 0);
-
-        this.projection = mat4.create();
-        this.view = mat4.create();
-
-        // setup
-
-        gl.disable(gl.CULL_FACE);
-        gl.frontFace(gl.CW);
-        gl.cullFace(gl.BACK);
-
-        gl.enable(gl.DEPTH_TEST);
-
-        gl.clearColor(0x87 / 0xff, 0xce / 0xff, 0xeb / 0xff, 1);
+    constructor() {
+        this.scene = new THREE.Scene();
+        this.renderer = new THREE.WebGLRenderer();
+        document.body.appendChild(this.renderer.domElement);
 
         this.resize();
-        this.setupView();
     }
 
     async load(): Promise<void> {
-        const loader: Loader = new Loader(this.gl);
+        const loader: Loader = new Loader();
 
-        this.cubeModel = await loader.loadObj('build/data/cube.obj', this.wallsSize);
-        this.wallTexture = await loader.loadTexture('build/data/wall.png');
-
-        this.donutModel = await loader.loadTet('build/data/model.tet');
-        this.donutTexture = await loader.loadTexture('build/data/model.png');
-
-        this.shader = await loader.loadShader(SceneShader, 'build/data/scene', [
-            'vertexPosition',
-            'vertexNormal',
-            'vertexTexCoord',
-            'projection',
-            'view',
-            'tex',
-        ]);
-
-        const gl = this.gl;
-
-        gl.useProgram(this.shader.program);
-
-        gl.uniform1i(this.shader.tex, 0);
-
-        gl.activeTexture(gl.TEXTURE0);
-
-        this.donutModel.recalcNormals();
-        this.donutModel.copyDataToBuffer(this.gl);
-    }
-
-    setupBuffer(buffer: WebGLBuffer): void {
-        const gl = this.gl;
-
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-
-        const SIZE_OF_VERTEX = (3 + 3 + 2) * Float32Array.BYTES_PER_ELEMENT;
-        gl.enableVertexAttribArray(this.shader.vertexPosition);
-        gl.vertexAttribPointer(
-            this.shader.vertexPosition,
-            4,
-            gl.FLOAT,
-            false,
-            SIZE_OF_VERTEX,
-            0 * Float32Array.BYTES_PER_ELEMENT,
+        this.cubeModel = new THREE.Mesh(
+            new THREE.BoxGeometry(this.wallsSize, this.wallsSize, this.wallsSize),
+            new THREE.MeshPhongMaterial({
+                map: await loader.loadTexture('build/data/wall.png'),
+                side: THREE.BackSide,
+            }),
         );
-        gl.enableVertexAttribArray(this.shader.vertexNormal);
-        gl.vertexAttribPointer(
-            this.shader.vertexNormal,
-            3,
-            gl.FLOAT,
-            false,
-            SIZE_OF_VERTEX,
-            3 * Float32Array.BYTES_PER_ELEMENT,
+        this.cubeModel.castShadow = false;
+        this.cubeModel.receiveShadow = true;
+
+        this.donut = await loader.loadTet('build/data/model.tet');
+        this.donutModel = new THREE.Mesh(
+            this.donut.geometry,
+            new THREE.MeshPhongMaterial({
+                map: await loader.loadTexture('build/data/model.png'),
+                reflectivity: 0,
+                shininess: 0,
+            }),
         );
-        gl.enableVertexAttribArray(this.shader.vertexTexCoord);
-        gl.vertexAttribPointer(
-            this.shader.vertexTexCoord,
-            2,
-            gl.FLOAT,
-            false,
-            SIZE_OF_VERTEX,
-            (3 + 3) * Float32Array.BYTES_PER_ELEMENT,
-        );
+        this.donutModel.castShadow = true;
+        this.donutModel.receiveShadow = false;
+
+        const light = new THREE.PointLight(0xffffff, 1, 100);
+        light.position.set(0, 0, this.wallsSize / 2);
+        light.castShadow = true;
+
+        light.shadow.mapSize.width = 1024; // default
+        light.shadow.mapSize.height = 1024; // default
+        light.shadow.camera.near = 0.01; // default
+        light.shadow.camera.far = 500; // default
+        light.shadow.bias = 0.001;
+
+        this.scene.add(light);
+        this.scene.add(this.cubeModel);
+        this.scene.add(this.donutModel);
+
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     }
 
     resize(): void {
-        const gl = this.gl;
-
-        const style = getComputedStyle(this.canvas);
         const dpr = window.devicePixelRatio;
-        this.canvas.width = parseFloat(style.width) * dpr;
-        this.canvas.height = parseFloat(style.height) * dpr;
+        const style = getComputedStyle(document.body);
+        const width = parseFloat(style.width) * dpr;
+        const height = parseFloat(style.height) * dpr;
 
-        gl.viewport(0.0, 0.0, this.canvas.width, this.canvas.height);
+        if (this.width == width && this.height === height) {
+            return;
+        }
 
-        const aspectRatio = this.canvas.width / this.canvas.height;
+        this.width = width;
+        this.height = height;
 
-        const FOV = 60;
+        this.renderer.setSize(width, height);
 
-        mat4.perspective(this.projection, glMatrix.toRadian(FOV), aspectRatio, 0.1, 1000.0);
+        const aspectRatio = width / height;
+        if (!this.camera) {
+            const FOV = 60;
+            this.camera = new THREE.PerspectiveCamera(FOV, aspectRatio, 0.1, 1000.0);
+            this.camera.up.set(0, 0, 1);
+        } else {
+            this.camera.aspect = aspectRatio;
+            this.camera.updateProjectionMatrix();
+        }
     }
 
     setCameraPosition(x: number, y: number, z: number): void {
-        this.cameraPosition[0] = x;
-        this.cameraPosition[1] = y;
-        this.cameraPosition[2] = z;
-
-        this.setupView();
+        this.camera.position.set(x, y, z);
     }
 
     // генерирует углы камеры для взгляда на точку из текущей позиции камеры
     lookAtPoint(x: number, y: number, z: number): void {
-        const point = vec3.fromValues(x, y, z);
-
-        const direction = vec3.create();
-        vec3.subtract(direction, point, this.cameraPosition);
-        vec3.normalize(direction, direction);
-
-        const sinX = Math.sqrt(1 - direction[2] * direction[2]);
-
-        this.cameraRotation[0] = Math.atan2(sinX, direction[2]);
-        this.cameraRotation[1] = Math.atan2(direction[0] / sinX, direction[1] / sinX);
-
-        this.setupView();
-    }
-
-    // переводит углы камеры в матрицу вида
-    setupView(): void {
-        // limit angles
-        this.cameraRotation[0] = Math.min(Math.max(0.1, this.cameraRotation[0]), 3.13);
-        this.cameraRotation[1] %= Math.PI * 2;
-
-        const sinX = Math.sin(this.cameraRotation[0]);
-        const cosX = Math.cos(this.cameraRotation[0]);
-        const sinZ = Math.sin(this.cameraRotation[1]);
-        const cosZ = Math.cos(this.cameraRotation[1]);
-        const cameraDirection = vec3.fromValues(sinX * sinZ, sinX * cosZ, cosX);
-
-        const cameraLookAt = vec3.create();
-        vec3.add(cameraLookAt, this.cameraPosition, cameraDirection);
-
-        const up = vec3.fromValues(0, 0, 1);
-
-        mat4.lookAt(this.view, this.cameraPosition, cameraLookAt, up);
+        this.camera.lookAt(x, y, z);
     }
 
     draw(): void {
-        const gl = this.gl;
-        gl.uniformMatrix4fv(this.shader.projection, false, this.projection);
-        gl.uniformMatrix4fv(this.shader.view, false, this.view);
-
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-        gl.bindTexture(gl.TEXTURE_2D, this.wallTexture);
-        this.setupBuffer(this.cubeModel.buffer);
-        gl.drawArrays(gl.TRIANGLES, 0, this.cubeModel.triangleCount * 3);
-
-        gl.bindTexture(gl.TEXTURE_2D, this.donutTexture);
-        this.setupBuffer(this.donutModel.vertexBuffer);
-        gl.drawArrays(gl.TRIANGLES, 0, this.donutModel.triangleCount * 3);
-
-        gl.finish();
+        this.renderer.render(this.scene, this.camera);
     }
 
     wrapDebug(context: WebGLRenderingContext): WebGLRenderingContext {
@@ -253,13 +147,13 @@ export default class Render {
     }
 
     getTetModel(): TetFile {
-        return this.donutModel;
+        return this.donut;
     }
 
     updateTetModel(): void {
         const tetModel = this.getTetModel();
         tetModel.recalcNormals();
-        tetModel.copyDataToBuffer(this.gl);
+        tetModel.copyDataToBuffer();
     }
 
     setWallsSize(size: number): void {

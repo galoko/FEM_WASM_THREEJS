@@ -1,19 +1,4 @@
-import { vec2, vec3 } from 'gl-matrix';
-import { sqrDist } from 'gl-matrix/src/gl-matrix/vec2';
-
-class ParsedObjectFile {
-    vertices: Array<vec3> = [];
-    texCoords: Array<vec2> = [];
-    normals: Array<vec3> = [];
-
-    // [[v, t, n], [v, t, n], [v, t, n]]
-    faces: Array<Array<Array<number>>> = [];
-}
-
-export class ObjFile {
-    buffer: WebGLBuffer;
-    triangleCount: number;
-}
+import * as THREE from 'three';
 
 class ParsedTetFile {
     // all vertices
@@ -31,13 +16,13 @@ export class TetFile {
     // these two will go to simulation
     vertices: Float32Array;
     tetsIndices: Uint32Array;
+    normals: Float32Array;
 
     // this will be just copied to GL buffer
     texCoords: Float32Array;
 
     // this will need to be calculated after vertices update
     faceNormals: Float32Array;
-    verticesNormals: Float32Array;
     // temporary buffer for normal calculation
     faceAreas: Float32Array;
 
@@ -46,9 +31,11 @@ export class TetFile {
     // list of faces connected to vertex
     connectedFaces: Map<number, Array<number>>;
 
-    // data buffer for gl buffer
-    vertexBufferData: Float32Array;
-    vertexBuffer: WebGLBuffer;
+    verticesPositions: Float32Array;
+    verticesTexCoords: Float32Array;
+    verticesNormals: Float32Array;
+
+    geometry: THREE.BufferGeometry;
 
     triangleCount: number;
 
@@ -132,47 +119,57 @@ export class TetFile {
             vny /= len;
             vnz /= len;
 
-            this.verticesNormals[vertexIndex * 3 + 0] = vnx;
-            this.verticesNormals[vertexIndex * 3 + 1] = vny;
-            this.verticesNormals[vertexIndex * 3 + 2] = vnz;
+            this.normals[vertexIndex * 3 + 0] = vnx;
+            this.normals[vertexIndex * 3 + 1] = vny;
+            this.normals[vertexIndex * 3 + 2] = vnz;
         }
-    }
 
-    public copyDataToBuffer(gl: WebGLRenderingContext): void {
-        let dataIndex = 0;
+        let vertexVisualIndex = 0;
         for (let faceIndex = 0; faceIndex < this.faces.length; faceIndex++) {
             const face = this.faces[faceIndex];
 
             for (let faceEntryIndex = 0; faceEntryIndex < face.length; faceEntryIndex++) {
                 const faceEntry = face[faceEntryIndex];
 
-                this.vertexBufferData[dataIndex++] = this.vertices[faceEntry[0] * 3 + 0];
-                this.vertexBufferData[dataIndex++] = this.vertices[faceEntry[0] * 3 + 1];
-                this.vertexBufferData[dataIndex++] = this.vertices[faceEntry[0] * 3 + 2];
+                const vertexIndex = faceEntry[0];
 
-                this.vertexBufferData[dataIndex++] = this.verticesNormals[faceEntry[0] * 3 + 0];
-                this.vertexBufferData[dataIndex++] = this.verticesNormals[faceEntry[0] * 3 + 1];
-                this.vertexBufferData[dataIndex++] = this.verticesNormals[faceEntry[0] * 3 + 2];
+                this.verticesNormals[vertexVisualIndex * 3 + 0] = this.normals[vertexIndex * 3 + 0];
+                this.verticesNormals[vertexVisualIndex * 3 + 1] = this.normals[vertexIndex * 3 + 1];
+                this.verticesNormals[vertexVisualIndex * 3 + 2] = this.normals[vertexIndex * 3 + 2];
 
-                this.vertexBufferData[dataIndex++] = this.texCoords[faceEntry[1] * 2 + 0];
-                this.vertexBufferData[dataIndex++] = this.texCoords[faceEntry[1] * 2 + 1];
+                vertexVisualIndex++;
             }
         }
 
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.vertexBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, this.vertexBufferData, gl.DYNAMIC_DRAW);
+        if (this.geometry) {
+            this.geometry.attributes.normal.needsUpdate = true;
+        }
+    }
+
+    public copyDataToBuffer(): void {
+        let vertexIndex = 0;
+        for (let faceIndex = 0; faceIndex < this.faces.length; faceIndex++) {
+            const face = this.faces[faceIndex];
+
+            for (let faceEntryIndex = 0; faceEntryIndex < face.length; faceEntryIndex++) {
+                const faceEntry = face[faceEntryIndex];
+
+                this.verticesPositions[vertexIndex * 3 + 0] = this.vertices[faceEntry[0] * 3 + 0];
+                this.verticesPositions[vertexIndex * 3 + 1] = this.vertices[faceEntry[0] * 3 + 1];
+                this.verticesPositions[vertexIndex * 3 + 2] = this.vertices[faceEntry[0] * 3 + 2];
+                vertexIndex++;
+            }
+        }
+        if (this.geometry) {
+            this.geometry.attributes.position.needsUpdate = true;
+        }
     }
 }
-
-export class CompiledShader {
-    program: WebGLProgram;
-}
-
 export class Loader {
-    gl: WebGLRenderingContext;
+    loader: THREE.TextureLoader;
 
-    constructor(gl: WebGLRenderingContext) {
-        this.gl = gl;
+    constructor() {
+        this.loader = new THREE.TextureLoader();
     }
 
     async fetchText(url: string): Promise<string> {
@@ -187,109 +184,26 @@ export class Loader {
         });
     }
 
-    async loadObj(url: string, size: number): Promise<ObjFile> {
-        const gl = this.gl;
-        return new Promise<ObjFile>(async (resolve, reject) => {
-            const obj: ParsedObjectFile = this.parseObjFile(await this.fetchText(url));
-
-            const data = new Float32Array(obj.faces.length * 3 * (3 + 3 + 2));
-            let dataIndex = 0;
-            for (let faceIndex = 0; faceIndex < obj.faces.length; faceIndex++) {
-                const face = obj.faces[faceIndex];
-
-                for (let faceEntryIndex = 0; faceEntryIndex < face.length; faceEntryIndex++) {
-                    const faceEntry = face[faceEntryIndex];
-
-                    const vertex = obj.vertices[faceEntry[0]];
-                    const texCoord = obj.texCoords[faceEntry[1]];
-                    const normal = obj.normals[faceEntry[2]];
-
-                    data[dataIndex++] = vertex[0] * size;
-                    data[dataIndex++] = vertex[1] * size;
-                    data[dataIndex++] = vertex[2] * size;
-
-                    data[dataIndex++] = normal[0];
-                    data[dataIndex++] = normal[1];
-                    data[dataIndex++] = normal[2];
-
-                    data[dataIndex++] = texCoord[0];
-                    data[dataIndex++] = texCoord[1];
-                }
-            }
-
-            const buffer = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-            gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-
-            const result = new ObjFile();
-            result.buffer = buffer;
-            result.triangleCount = obj.faces.length;
-
-            resolve(result);
-        });
-    }
-
-    parseObjFile(text: string): ParsedObjectFile {
-        const result = new ParsedObjectFile();
-        const lines: Array<string> = text.split(/\r?\n/);
-        lines.forEach((line: string): void => {
-            line = line.trim();
-            if (line.startsWith('#')) return;
-            const values: Array<string> = line.split(' ');
-            if (values.length < 1) return;
-            switch (values[0]) {
-                case 'v': {
-                    const v = vec3.fromValues(parseFloat(values[1]), parseFloat(values[2]), parseFloat(values[3]));
-                    result.vertices.push(v);
-                    break;
-                }
-                case 'vt': {
-                    const t = vec2.fromValues(parseFloat(values[1]), parseFloat(values[2]));
-                    result.texCoords.push(t);
-                    break;
-                }
-                case 'vn': {
-                    const n = vec3.fromValues(parseFloat(values[1]), parseFloat(values[2]), parseFloat(values[3]));
-                    result.normals.push(n);
-                    break;
-                }
-                case 'f': {
-                    const face: Array<Array<number>> = [];
-                    for (let i = 0; i < 3; i++) {
-                        const indicesStrs: Array<string> = values[1 + i].split('/');
-                        const indices: Array<number> = [];
-                        for (let j = 0; j < indicesStrs.length; j++) {
-                            indices.push(parseInt(indicesStrs[j]) - 1);
-                        }
-                        face.push(indices);
-                    }
-                    result.faces.push(face);
-                    break;
-                }
-            }
-        });
-        return result;
-    }
-
-    async loadTet(url: string): Promise<TetFile> {
-        const gl = this.gl;
+    loadTet(url: string): Promise<TetFile> {
         return new Promise<TetFile>(async (resolve, reject) => {
             const tet: ParsedTetFile = this.parseTetFile(await this.fetchText(url));
 
             const result = new TetFile();
 
-            result.vertexBuffer = gl.createBuffer();
             result.triangleCount = tet.faces.length;
 
+            // parsed data
             result.vertices = new Float32Array(tet.vertices);
             result.tetsIndices = new Uint32Array(tet.tetsIndices);
             result.faces = tet.faces;
             result.texCoords = new Float32Array(tet.texCoords);
-            result.faceNormals = new Float32Array(result.triangleCount * 3);
-            result.verticesNormals = new Float32Array(result.triangleCount * 3 * 3);
-            result.faceAreas = new Float32Array(result.triangleCount);
-            result.vertexBufferData = new Float32Array(result.triangleCount * 3 * (3 + 3 + 2));
 
+            // temp data
+            result.faceNormals = new Float32Array(result.triangleCount * 3);
+            result.faceAreas = new Float32Array(result.triangleCount);
+            result.normals = new Float32Array(result.vertices.length * 3);
+
+            // filling out connected faces info
             result.connectedFaces = new Map();
             for (let faceIndex = 0; faceIndex < result.faces.length; faceIndex++) {
                 for (let faceVertexIndex = 0; faceVertexIndex < 3; faceVertexIndex++) {
@@ -302,7 +216,53 @@ export class Loader {
                 }
             }
 
+            // three js data
+            result.verticesPositions = new Float32Array(result.triangleCount * 3 * 3);
+            result.verticesTexCoords = new Float32Array(result.triangleCount * 3 * 2);
+            result.verticesNormals = new Float32Array(result.triangleCount * 3 * 3);
+
+            // заполняем массив с текстурными координатами заранее
+            let vertexIndex = 0;
+            for (let faceIndex = 0; faceIndex < result.faces.length; faceIndex++) {
+                const face = result.faces[faceIndex];
+
+                for (let faceEntryIndex = 0; faceEntryIndex < face.length; faceEntryIndex++) {
+                    const faceEntry = face[faceEntryIndex];
+
+                    result.verticesTexCoords[vertexIndex * 2 + 0] = result.texCoords[faceEntry[1] * 2 + 0];
+                    result.verticesTexCoords[vertexIndex * 2 + 1] = result.texCoords[faceEntry[1] * 2 + 1];
+
+                    vertexIndex++;
+                }
+            }
+
+            result.recalcNormals();
+            result.copyDataToBuffer();
+
+            // создаем геометрию для ThreeJS
+            result.geometry = new THREE.BufferGeometry();
+            result.geometry.setAttribute('position', new THREE.BufferAttribute(result.verticesPositions, 3));
+            result.geometry.setAttribute('uv', new THREE.BufferAttribute(result.verticesTexCoords, 2));
+            result.geometry.setAttribute('normal', new THREE.BufferAttribute(result.verticesNormals, 3));
+
             resolve(result);
+        });
+    }
+
+    async loadTexture(url: string): Promise<THREE.Texture> {
+        return new Promise((resolve, reject) => {
+            this.loader.load(
+                url,
+                texture => {
+                    resolve(texture);
+                },
+                () => {
+                    //
+                },
+                () => {
+                    reject();
+                },
+            );
         });
     }
 
@@ -349,93 +309,5 @@ export class Loader {
             }
         });
         return result;
-    }
-
-    async loadTexture(url: string): Promise<WebGLTexture> {
-        const gl = this.gl;
-        return new Promise<WebGLTexture>((resolve, reject) => {
-            const tex = gl.createTexture();
-            const image = new Image();
-            image.onload = (): void => {
-                gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D, tex);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-                gl.generateMipmap(gl.TEXTURE_2D);
-
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-                resolve(tex);
-            };
-            image.onerror = (): void => {
-                reject('Failed to load an image.');
-            };
-            image.src = url;
-        });
-    }
-
-    async loadShader<T extends CompiledShader>(
-        type: new () => T,
-        baseUrl: string,
-        parameters: Array<string>,
-    ): Promise<T> {
-        const gl = this.gl;
-        return new Promise<T>(async (resolve, reject) => {
-            const vertText = await this.fetchText(`${baseUrl}.vert`);
-            const fragText = await this.fetchText(`${baseUrl}.frag`);
-
-            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
-            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
-
-            gl.shaderSource(vertexShader, vertText);
-            gl.shaderSource(fragmentShader, fragText);
-
-            gl.compileShader(vertexShader);
-            if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
-                reject(`ERROR compiling vertex shader for ${name}! ${gl.getShaderInfoLog(vertexShader)}`);
-                return;
-            }
-
-            gl.compileShader(fragmentShader);
-            if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
-                reject(`ERROR compiling fragment shader for ${name}! ${gl.getShaderInfoLog(fragmentShader)}`);
-                return;
-            }
-
-            const program = gl.createProgram();
-            gl.attachShader(program, vertexShader);
-            gl.attachShader(program, fragmentShader);
-            gl.linkProgram(program);
-            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-                reject(`ERROR linking program! ${gl.getProgramInfoLog(program)}`);
-                return;
-            }
-            gl.validateProgram(program);
-            if (!gl.getProgramParameter(program, gl.VALIDATE_STATUS)) {
-                reject(`ERROR validating program! ${gl.getProgramInfoLog(program)}`);
-                return;
-            }
-
-            const result = new type();
-            result.program = program;
-
-            parameters.forEach((parameter: string): void => {
-                const uniformLocation = gl.getUniformLocation(program, parameter);
-                if (uniformLocation !== null) {
-                    (result as any)[parameter] = uniformLocation;
-                } else {
-                    const attributeLocation = gl.getAttribLocation(program, parameter);
-                    if (attributeLocation !== null) {
-                        (result as any)[parameter] = attributeLocation;
-                    } else {
-                        console.warn(`${parameter} is not found in shader.`);
-                    }
-                }
-            });
-
-            resolve(result);
-        });
     }
 }

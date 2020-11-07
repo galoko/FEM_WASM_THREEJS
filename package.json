@@ -4,6 +4,7 @@
   "description": "FEM using WebGL + WASM",
   "scripts": {
     "build:release": "webpack -p",
+    "build:develop": "webpack -d",
     "start:server": "webpack-dev-server -d --open --port 3005",
     "watch:wasm": "nodemon --watch ./src/cpp/ --ext c,cpp,h,hpp --exec build-wasm"
   },
@@ -26,6 +27,7 @@
     "webpack-dev-server": "^3.10.3"
   },
   "dependencies": {
-    "gl-matrix": "^3.2.1"
+    "gl-matrix": "^3.2.1",
+    "three": "^0.122.0"
   }
 }
