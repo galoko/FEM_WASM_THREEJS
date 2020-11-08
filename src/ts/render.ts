@@ -16,6 +16,7 @@ export default class Render {
 
     private width: number;
     private height: number;
+    private dpr: number;
 
     constructor() {
         this.scene = new THREE.Scene();
@@ -58,7 +59,7 @@ export default class Render {
         light.shadow.mapSize.height = 1024; // default
         light.shadow.camera.near = 0.01; // default
         light.shadow.camera.far = 500; // default
-        light.shadow.bias = 0.001;
+        light.shadow.bias = 0.1;
 
         this.scene.add(light);
         this.scene.add(this.cubeModel);
@@ -71,17 +72,19 @@ export default class Render {
     resize(): void {
         const dpr = window.devicePixelRatio;
         const style = getComputedStyle(document.body);
-        const width = parseFloat(style.width) * dpr;
-        const height = parseFloat(style.height) * dpr;
+        const width = parseFloat(style.width);
+        const height = parseFloat(style.height);
 
-        if (this.width == width && this.height === height) {
+        if (this.width == width && this.height === height && this.dpr === dpr) {
             return;
         }
 
         this.width = width;
         this.height = height;
+        this.dpr = dpr;
 
         this.renderer.setSize(width, height);
+        this.renderer.setPixelRatio(dpr);
 
         const aspectRatio = width / height;
         if (!this.camera) {
