@@ -51,17 +51,22 @@ export default class Render {
         this.donutModel.castShadow = true;
         this.donutModel.receiveShadow = false;
 
-        const light = new THREE.PointLight(0xffffff, 1, 100);
-        light.position.set(0, 0, this.wallsSize / 2);
-        light.castShadow = true;
+        const pointLight = new THREE.PointLight(0xffffff, 1, 100);
+        pointLight.position.set(0, 0, this.wallsSize / 2);
+        pointLight.intensity = 0.8;
+        pointLight.castShadow = true;
 
-        light.shadow.mapSize.width = 1024; // default
-        light.shadow.mapSize.height = 1024; // default
-        light.shadow.camera.near = 0.01; // default
-        light.shadow.camera.far = 500; // default
-        light.shadow.bias = 0.1;
+        pointLight.shadow.mapSize.width = 1024; // default
+        pointLight.shadow.mapSize.height = 1024; // default
+        pointLight.shadow.camera.near = 1; // default
+        pointLight.shadow.camera.far = 500; // default
+        pointLight.shadow.bias = 0.0001;
+        this.scene.add(pointLight);
 
+        const light = new THREE.AmbientLight(0xffffff); // soft white light
+        light.intensity = 1 - pointLight.intensity;
         this.scene.add(light);
+
         this.scene.add(this.cubeModel);
         this.scene.add(this.donutModel);
 
@@ -87,12 +92,13 @@ export default class Render {
         this.renderer.setPixelRatio(dpr);
 
         const aspectRatio = width / height;
+        const FOV = 60 / Math.min(1, aspectRatio);
         if (!this.camera) {
-            const FOV = 60;
             this.camera = new THREE.PerspectiveCamera(FOV, aspectRatio, 0.1, 1000.0);
             this.camera.up.set(0, 0, 1);
         } else {
             this.camera.aspect = aspectRatio;
+            this.camera.fov = FOV;
             this.camera.updateProjectionMatrix();
         }
     }
